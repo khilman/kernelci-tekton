@@ -1,0 +1,47 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: task-init-mirror
+
+spec:
+
+  params:
+    - name: kernel-git-url
+      type: string
+      default: https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+    - name: kci-core-url
+      type: string
+      default: https://github.com/kernelci/kernelci-core.git
+
+  workspaces:
+    - name: mirror
+              
+  steps:
+    - name: init-mirror
+      image: kernelci/build-base
+      script: |
+        cd $(workspaces.mirror.path)
+        if [ ! -e linux.git ]; then git clone --mirror $(params.kernel-git-url) linux.git; fi
+        if [ ! -e kernelci-core.git ]; then git clone --mirror $(params.kci-core-url) kernelci-core.git; fi
+        ls -l
+
+    - name: update-mirror
+      image: kernelci/build-base
+      script: |
+        cd $(workspaces.mirror.path)
+        if [ -e linux.git ]; then cd linux.git; git remote update; fi
+        if [ -e kernelci-core.git ]; then cd kernelci-core.git; git remote update; fi
+        ls -l
+---
+apiVersion: tekton.dev/v1beta1
+kind: TaskRun
+metadata:
+  name: run-init-mirror
+spec:
+  taskRef:
+    name: task-init-mirror
+
+  workspaces:
+    - name: mirror
+      persistentVolumeClaim:
+        claimName: pvc-kci-mirror
