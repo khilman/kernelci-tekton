@@ -1,0 +1,117 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: task-kernelci-build-kernel
+
+spec:
+  params:
+    # Input params
+    - name: ARCH
+      type: string
+      default: arm64
+    - name: BUILD_ENVIRONMENT
+      type: string
+      default: gcc-8
+    - name: DEFCONFIG
+      type: string
+      default: defconfig
+    - name: PARALLEL_JOPT
+      type: string
+      default: "-j16"
+    - name: BUILD_CONFIG
+      type: string
+      default: mainline
+    - name: GIT_DESCRIBE
+      type: string
+      default: $(params.COMMIT_ID)
+    - name: GIT_DESCRIBE_VERBOSE
+      type: string
+      default: $(params.GIT_DESCRIBE)
+    - name: COMMIT_ID
+      type: string
+    - name: KCI_API_URL
+      type: string
+      default: https://api.staging.kernelci.org
+    - name: KCI_API_TOKEN
+      type: string
+      default: dummy
+    - name: KCI_CORE_URL
+      type: string
+      default: https://github.com/kernelci/kernelci-core.git
+    - name: KCI_CORE_BRANCH
+      type: string
+      default: staging.kernelci.org
+    - name: SRC_TARBALL
+      type: string
+      default: ""
+      
+  workspaces:
+    # fast: tmpfs/ ramdisk 
+    - name: scratch
+      optional: true
+    # slow: shared network disk 
+    - name: data
+      optional: true
+    - name: mirror
+      readOnly: true
+      optional: true
+      
+  steps:
+    - name: prepare
+      image: kernelci/build-base
+      script: |
+        #!/usr/bin/env bash
+        set -x
+        
+        GIT_REF=""
+        GIT_MIRROR=""
+        if [ "$(workspaces.mirror.bound)" == "true" ]; then
+          GIT_REF="--reference $(workspaces.mirror.path)/kernelci-core.git "
+          GIT_MIRROR="--mirror $(workspaces.mirror.path)/linux.git "
+        fi  
+        git clone $GIT_REF --branch $(params.KCI_CORE_BRANCH) $(params.KCI_CORE_URL)
+        cd kernelci-core
+        
+        #KDIR=$(workspaces.data.path)/configs/$(params.BUILD_CONFIG)
+        KDIR=/workspace/configs/$(params.BUILD_CONFIG)
+
+        # check if there's a local git copy already
+        if [ -e $KDIR/.git ]; then
+          ./kci_build update_repo --build-config $(params.BUILD_CONFIG) $GIT_MIRROR --kdir $KDIR
+          ./kci_build describe --kdir ${KDIR} --build-config $(params.BUILD_CONFIG)
+          (cd $KDIR; git checkout -f $(params.COMMIT_ID))
+        # otherwise, fetch a tarball
+        elif [ ! -z $(params.SRC_TARBALL) ]; then
+          ./kci_build pull_tarball --kdir ${KDIR} --url $(params.SRC_TARBALL) --retries 3 --delete
+        else
+          echo "ERROR: No kernel source anywhere"
+          exit 1
+        fi
+
+        # FIXME: need to dynamicaly generate image for next step
+        # Docker image name for build step
+        ./kci_build show_build_env --arch $(params.ARCH) --build-env $(params.BUILD_ENVIRONMENT)
+
+    - name: build
+      image: kernelci/build-$(params.BUILD_ENVIRONMENT)_$(params.ARCH)
+      resources:
+        limits:
+          cpu: "8"
+        requests:
+          cpu: "6.1"
+          memory: "8Gi"
+      script: |
+        cd kernelci-core
+
+        KDIR=/workspace/configs/$(params.BUILD_CONFIG)
+
+        # FIXME: ccache is a waste of time with ephemeral storage
+        export CCACHE_DISABLE=1
+        
+        ./kci_build generate_fragments --build-config $(params.BUILD_CONFIG) --kdir ${KDIR}
+        ./kci_build build_kernel --kdir ${KDIR} ${OUTPUT} --defconfig=$(params.DEFCONFIG) --arch=$(params.ARCH) --build-env=$(params.BUILD_ENVIRONMENT) --verbose $(params.PARALLEL_JOPT)
+        export KERNEL_BUILD_RESULT=$?
+
+        ./kci_build install_kernel --kdir ${KDIR} ${OUTPUT} --build-config $(params.BUILD_CONFIG) --describe $(params.GIT_DESCRIBE) --describe-verbose $(params.GIT_DESCRIBE_VERBOSE) --commit=$(params.COMMIT_ID)
+        ./kci_build push_kernel --kdir ${KDIR} --db-token=$(params.KCI_API_TOKEN) --api=$(params.KCI_API_URL)
+        ./kci_build publish_kernel --kdir ${KDIR} --db-token=$(params.KCI_API_TOKEN) --api=$(params.KCI_API_URL)

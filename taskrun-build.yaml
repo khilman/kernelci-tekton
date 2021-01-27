@@ -1,0 +1,51 @@
+apiVersion: tekton.dev/v1beta1
+kind: TaskRun
+metadata:
+  name: run-kernelci-build-kernel-00
+spec:
+  taskRef:
+    name: task-kernelci-build-kernel
+
+  # workspaces:
+  #   - name: scratch
+  #     emptyDir: { medium: "Memory" }
+  #   - name: mirror
+  #     persistentVolumeClaim:
+  #       claimName: kci-mirror-pv-claim
+  #       readOnly: true
+  #   - name: data
+  #     persistentVolumeClaim:
+  #       claimName: pvc-kci-data-azurefile
+
+  params:
+    - name: BUILD_CONFIG
+      value: "amlogic_integ"
+    - name: ARCH
+      value: arm64
+#    - name: DEFCONFIG
+#      value: "defconfig+kernel/configs/kselftest.config"
+    - name: COMMIT_ID
+      value: 1433df182adb1c5ceec440361777eb7788599aa0
+    - name: GIT_DESCRIBE
+      value: v5.11-rc5-32-g1433df182adb
+    - name: GIT_DESCRIBE_VERBOSE
+      value: v5.11-rc5-32-g1433df182adb
+    - name: SRC_TARBALL
+      value: "https://storage.staging.kernelci.org/amlogic/integ/v5.11-rc5-32-g1433df182adb/linux-src_amlogic_integ.tar.gz"
+    - name: KCI_CORE_URL
+      value: "https://github.com/kernelci/kernelci-core.git"
+    - name: KCI_CORE_BRANCH
+      value: "staging.kernelci.org"
+
+  podTemplate:
+    #securityContext:
+    #  runAsNonRoot: true
+    #  runAsUser: nobody
+      
+    # tolerate Azure spot instances
+    tolerations:
+      - key: "kubernetes.azure.com/scalesetpriority"
+        operator: "Equal"
+        value: "spot"
+        effect: "NoSchedule"
+
