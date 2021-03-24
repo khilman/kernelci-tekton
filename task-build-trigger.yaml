@@ -215,4 +215,4 @@ spec:
         #!/bin/bash
         if [ -s $(results.last-commit.path) ]; then echo "New commit: $(cat $(results.last-commit.path))"; fi
         if [ -s $(results.kernel-tarball-url.path) ]; then echo "Kernel tarball: $(cat $(results.kernel-tarball-url.path))"; fi
-        if [ -s $(results.config-list.path) ]; then echo "Config list: $(cat $(results.config-list.path))"; fi
+        if [ -s $(results.config-list.path) ]; then echo "Config list:"; cat $(results.config-list.path); fi
