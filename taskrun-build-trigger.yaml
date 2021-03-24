@@ -1,0 +1,35 @@
+apiVersion: tekton.dev/v1beta1
+kind: TaskRun
+metadata:
+  name: run-kernelci-build-trigger
+spec:
+  taskRef:
+    name: task-kci-build-trigger
+
+  workspaces:
+    - name: data
+      persistentVolumeClaim:
+        claimName: pvc-kci-data
+    # - name: mirror
+    #   persistentVolumeClaim:
+    #     claimName: pvc-kci-mirror
+
+  params:
+    - name: BUILD_CONFIG
+      value: "amlogic_integ"
+    - name: KCI_CORE_URL
+      value: "https://github.com/khilman/kernelci-core.git"
+    - name: KCI_CORE_BRANCH
+      value: "dev/tekton"
+    - name: KCI_API_TOKEN
+      value: d23be53f-3cea-43ce-a973-60795a4cbac1
+
+  podTemplate:
+    # tolerate Azure spot instances
+    tolerations:
+      - key: "kubernetes.azure.com/scalesetpriority"
+        operator: "Equal"
+        value: "spot"
+        effect: "NoSchedule"
+
+      
