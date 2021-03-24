@@ -1,0 +1,218 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: task-kci-build-trigger
+
+spec:
+  params:
+    - name: BUILD_CONFIG
+      type: string
+      default: mainline
+    - name: KCI_STORAGE_URL
+      type: string
+      default: https://storage.staging.kernelci.org
+    - name: KCI_API_URL
+      type: string
+      default: https://api.staging.kernelci.org
+    - name: KCI_API_TOKEN
+      type: string
+      default: dummy
+    - name: KCI_CORE_URL
+      type: string
+      default: https://github.com/kernelci/kernelci-core.git
+    - name: KCI_CORE_BRANCH
+      type: string
+      default: staging.kernelci.org
+      
+  results:
+    - name: last-commit
+      description: The latest commit in the kernel git repo
+    - name: kernel-tarball-url
+      description: URL for compressed tar archive of kernel source
+    - name: config-list
+      description: List of configs to build
+    - name: kernel-tarball
+      description: Local path for compressed tar archive of kernel source
+      
+  workspaces:
+    - name: data
+
+  steps:
+    - name: prepare
+      image: kernelci/build-base
+      script: |
+        ls -l $(workspaces.data.path)
+        git clone --reference $(workspaces.data.path)/kernelci-core.git --branch $(params.KCI_CORE_BRANCH) $(params.KCI_CORE_URL)
+        # TODO: install kernelci-core system-wide for embedded python scripts to use directly
+        #       but needs to be shared across all steps
+        #apt-get install -y python3-pip python3-setuptools
+        #(cd kernelci-core; python3 setup.py install)
+        
+    - name: check-configs
+      image: kernelci/build-base
+      script: |
+        #!/usr/bin/env python3
+        #
+        # Code borrowed directly from kci_build::cmd_check_new_commit()
+        #
+        # Equivalent of:
+        #   ./kci_build check_new_commit --build-config $(params.BUILD_CONFIG) --storage $(params.KCI_STORAGE_URL) > $(results.last-commit.path)
+        #
+        import sys
+
+        # HACK: needed when using a local checkout of kernelci
+        import os
+        os.chdir("kernelci-core")
+        sys.path.append(os.getcwd())
+        
+        import kernelci
+        import kernelci.build
+        import kernelci.config.build
+        
+        def check_new_commit(configs):
+          conf = configs['build_configs']["$(params.BUILD_CONFIG)"]
+          update = kernelci.build.check_new_commit(conf, "$(params.KCI_STORAGE_URL)")
+          if update is False or update is True:
+            return update
+          print(update)
+
+          with open("$(results.last-commit.path)", "w") as file:
+            file.write(update)
+            
+          return True
+
+        configs = kernelci.config.build.from_yaml("build-configs.yaml")
+        check_new_commit(configs)
+
+    - name: update
+      image: kernelci/build-base
+      script: |
+        #!/usr/bin/env bash
+        set -x
+
+        KDIR=$(workspaces.data.path)/configs/$(params.BUILD_CONFIG)
+        #rm -rf $KDIR
+        cd kernelci-core
+        ./kci_build update_mirror --build-config $(params.BUILD_CONFIG) --mirror $(workspaces.data.path)/linux.git
+        ./kci_build update_repo --build-config $(params.BUILD_CONFIG) --mirror $(workspaces.data.path)/linux.git --kdir $KDIR
+        if [ $? != 0 ]; then
+          echo "ERROR: unable to update_repo.  Removing & trying again"
+          rm -rf ${KDIR}
+          ./kci_build update_repo --build-config $(params.BUILD_CONFIG) --mirror $(workspaces.data.path)/linux.git --kdir $KDIR
+        fi
+        
+
+    - name: update-last-commit
+      image: kernelci/build-base
+      script: |
+        #!/usr/bin/env python3
+        import sys
+
+        # HACK: needed when using a local checkout of kernelci
+        import os
+        os.chdir("kernelci-core")
+        sys.path.append(os.getcwd())
+        
+        import kernelci
+        import kernelci.build
+        import kernelci.config.build
+
+        def describe(configs):
+          kdir = "$(workspaces.data.path)/configs/$(params.BUILD_CONFIG)" 
+          conf = configs['build_configs']["$(params.BUILD_CONFIG)"]
+          commit = kernelci.build.head_commit(kdir)
+          describe = kernelci.build.git_describe(conf.tree.name, kdir)
+          verbose = kernelci.build.git_describe_verbose(kdir)
+          print(commit)
+          print(describe)
+          print(verbose or describe)
+          return commit
+
+        def update_last_commit(configs, commit):
+          conf = configs['build_configs']["$(params.BUILD_CONFIG)"]
+          kernelci.build.set_last_commit(conf, "$(params.KCI_API_URL)", "$(params.KCI_API_TOKEN)", commit)
+          return True
+
+        configs = kernelci.config.build.from_yaml("build-configs.yaml")
+        commit = describe(configs)
+        update_last_commit(configs, commit)
+        
+    - name: generate-fragments
+      image: kernelci/build-base
+      script: |
+        #!/usr/bin/env bash
+        set -x
+        cd kernelci-core
+        KDIR=$(workspaces.data.path)/configs/$(params.BUILD_CONFIG)
+        ./kci_build generate_fragments --build-config $(params.BUILD_CONFIG) --kdir $KDIR
+        
+    - name: push-tarball
+      image: kernelci/build-base
+      script: |
+        #!/usr/bin/env python3
+        #
+        # Code borrowed directly from kci_build::cmd_push_tarball 
+        #
+        import sys
+
+        # HACK: needed when using a local checkout of kernelci
+        import os
+        os.chdir("kernelci-core")
+        sys.path.append(os.getcwd())
+        
+        import kernelci
+        import kernelci.build
+        import kernelci.config.build
+
+        def call(configs):
+          conf = configs['build_configs']["$(params.BUILD_CONFIG)"]
+          kdir = "$(workspaces.data.path)/configs/$(params.BUILD_CONFIG)"
+          func_args = (conf, kdir, "$(params.KCI_STORAGE_URL)", "$(params.KCI_API_URL)", "$(params.KCI_API_TOKEN)")
+          if not all(func_args):
+            print("Invalid arguments")
+            return False
+          tarball_url = kernelci.build.push_tarball(*func_args)
+          if not tarball_url:
+            return False
+          print(tarball_url)
+          with open("$(results.kernel-tarball-url.path)", "w") as file:
+            file.write(tarball_url)
+          return True
+
+        configs = kernelci.config.build.from_yaml("build-configs.yaml")
+        call(configs)
+        
+    - name: list-configs
+      image: kernelci/build-base
+      script: |
+        #!/usr/bin/env python3
+        #
+        # Code borrowed directly from kci_build::cmd_list_configs
+        #
+        import sys
+
+        # HACK: needed when using a local checkout of kernelci
+        import os
+        os.chdir("kernelci-core")
+        sys.path.append(os.getcwd())
+
+        import kernelci
+        import kernelci.config.build
+
+        def list_configs(configs):
+          with open("$(results.config-list.path)", "w") as file:
+            for conf_name in list(configs['build_configs'].keys()):
+              print(conf_name)
+              file.write("{}\n".format(conf_name))
+          return True
+
+        configs = kernelci.config.build.from_yaml("build-configs.yaml")
+        list_configs(configs)
+
+    - name: check-results
+      image: kernelci/build-base
+      script: |
+        #!/bin/bash
+        if [ -s $(results.last-commit.path) ]; then echo "New commit: $(cat $(results.last-commit.path))"; fi
+        if [ -s $(results.kernel-tarball-url.path) ]; then echo "Kernel tarball: $(cat $(results.kernel-tarball-url.path))"; fi
+        if [ -s $(results.config-list.path) ]; then echo "Config list: $(cat $(results.config-list.path))"; fi
