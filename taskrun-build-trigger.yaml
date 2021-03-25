@@ -15,21 +15,21 @@ spec:
     #     claimName: pvc-kci-mirror
 
   params:
-    - name: BUILD_CONFIG
-      value: "amlogic_integ"
-    - name: KCI_CORE_URL
-      value: "https://github.com/khilman/kernelci-core.git"
-    - name: KCI_CORE_BRANCH
-      value: "dev/tekton"
+    # - name: BUILD_CONFIG
+    #   value: "amlogic_integ"
+    # - name: KCI_CORE_URL
+    #   value: "https://github.com/khilman/kernelci-core.git"
+    # - name: KCI_CORE_BRANCH
+    #   value: "dev/tekton"
     - name: KCI_API_TOKEN
       value: d23be53f-3cea-43ce-a973-60795a4cbac1
 
-  podTemplate:
-    # tolerate Azure spot instances
-    tolerations:
-      - key: "kubernetes.azure.com/scalesetpriority"
-        operator: "Equal"
-        value: "spot"
-        effect: "NoSchedule"
+  # podTemplate:
+  #   # tolerate Azure spot instances
+  #   tolerations:
+  #     - key: "kubernetes.azure.com/scalesetpriority"
+  #       operator: "Equal"
+  #       value: "spot"
+  #       effect: "NoSchedule"
 
       

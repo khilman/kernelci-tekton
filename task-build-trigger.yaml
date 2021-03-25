@@ -29,10 +29,6 @@ spec:
       description: The latest commit in the kernel git repo
     - name: kernel-tarball-url
       description: URL for compressed tar archive of kernel source
-    - name: config-list
-      description: List of configs to build
-    - name: kernel-tarball
-      description: Local path for compressed tar archive of kernel source
       
   workspaces:
     - name: data
@@ -81,10 +77,10 @@ spec:
             
           return True
 
-        configs = kernelci.config.build.from_yaml("build-configs.yaml")
+        configs = kernelci.config.build.from_yaml("config/core/build-configs.yaml")
         check_new_commit(configs)
 
-    - name: update
+    - name: update-mirror-checkout
       image: kernelci/build-base
       script: |
         #!/usr/bin/env bash
@@ -101,7 +97,6 @@ spec:
           ./kci_build update_repo --build-config $(params.BUILD_CONFIG) --mirror $(workspaces.data.path)/linux.git --kdir $KDIR
         fi
         
-
     - name: update-last-commit
       image: kernelci/build-base
       script: |
@@ -124,7 +119,6 @@ spec:
           describe = kernelci.build.git_describe(conf.tree.name, kdir)
           verbose = kernelci.build.git_describe_verbose(kdir)
           print(commit)
-          print(describe)
           print(verbose or describe)
           return commit
 
@@ -133,7 +127,7 @@ spec:
           kernelci.build.set_last_commit(conf, "$(params.KCI_API_URL)", "$(params.KCI_API_TOKEN)", commit)
           return True
 
-        configs = kernelci.config.build.from_yaml("build-configs.yaml")
+        configs = kernelci.config.build.from_yaml("config/core/build-configs.yaml")
         commit = describe(configs)
         update_last_commit(configs, commit)
         
@@ -179,40 +173,12 @@ spec:
             file.write(tarball_url)
           return True
 
-        configs = kernelci.config.build.from_yaml("build-configs.yaml")
+        configs = kernelci.config.build.from_yaml("config/core/build-configs.yaml")
         call(configs)
         
-    - name: list-configs
-      image: kernelci/build-base
-      script: |
-        #!/usr/bin/env python3
-        #
-        # Code borrowed directly from kci_build::cmd_list_configs
-        #
-        import sys
-
-        # HACK: needed when using a local checkout of kernelci
-        import os
-        os.chdir("kernelci-core")
-        sys.path.append(os.getcwd())
-
-        import kernelci
-        import kernelci.config.build
-
-        def list_configs(configs):
-          with open("$(results.config-list.path)", "w") as file:
-            for conf_name in list(configs['build_configs'].keys()):
-              print(conf_name)
-              file.write("{}\n".format(conf_name))
-          return True
-
-        configs = kernelci.config.build.from_yaml("build-configs.yaml")
-        list_configs(configs)
-
     - name: check-results
       image: kernelci/build-base
       script: |
         #!/bin/bash
         if [ -s $(results.last-commit.path) ]; then echo "New commit: $(cat $(results.last-commit.path))"; fi
-        if [ -s $(results.kernel-tarball-url.path) ]; then echo "Kernel tarball: $(cat $(results.kernel-tarball-url.path))"; fi
-        if [ -s $(results.config-list.path) ]; then echo "Config list:"; cat $(results.config-list.path); fi
+        if [ -s $(results.kernel-tarball-url.path) ]; then echo "Kernel tarball URL: $(cat $(results.kernel-tarball-url.path))"; fi
