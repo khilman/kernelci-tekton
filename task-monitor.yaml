@@ -1,0 +1,87 @@
+#apiVersion: tekton.dev/v1beta1
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: task-kci-monitor
+
+spec:
+  params:
+    - name: CONFIG_LIST
+      type: string
+    - name: KCI_CORE_URL
+      type: string
+      default: https://github.com/kernelci/kernelci-core.git
+    - name: KCI_CORE_BRANCH
+      type: string
+      default: staging.kernelci.org
+    - name: KCI_STORAGE_URL
+      type: string
+      default: https://storage.staging.kernelci.org
+
+  results:
+    - name: config-list
+      description: List of configs to build
+
+  workspaces:
+    - name: data
+
+  steps:
+    - name: prepare
+      image: kernelci/build-base
+      script: |
+        ls -l $(workspaces.data.path)
+        git clone --reference $(workspaces.data.path)/kernelci-core.git --branch $(params.KCI_CORE_BRANCH) $(params.KCI_CORE_URL)
+
+    - name: list-configs
+      image: kernelci/build-base
+      script: |
+        #!/usr/bin/env python3
+        import sys
+
+        # HACK: needed when using a local checkout of kernelci
+        import os
+        os.chdir("kernelci-core")
+        sys.path.append(os.getcwd())
+
+        import kernelci
+        import kernelci.build
+        import kernelci.config.build
+
+        configs = kernelci.config.build.from_yaml("config/core/build-configs.yaml")
+        if "$(params.CONFIG_LIST)":
+          config_list = "$(params.CONFIG_LIST)".split()
+        else:
+          config_list = list(configs['build_configs'].keys())
+
+        with open("$(results.config-list.path)", "w") as file:
+          for conf_name in config_list:
+            conf = configs['build_configs'][conf_name]
+            update = kernelci.build.check_new_commit(conf, "$(params.KCI_STORAGE_URL)")
+
+            if type(update) != bool:
+              file.write("{}\n".format(conf_name))
+              print("New commit in {}: {}".format(conf_name, update))
+
+    - name: check-results
+      image: kernelci/build-base
+      script: |
+        #!/bin/bash
+        if [ -s $(results.config-list.path) ]; then echo "Config list:"; cat $(results.config-list.path); fi
+              
+---
+apiVersion: tekton.dev/v1beta1
+kind: TaskRun
+metadata:
+  name: run-kci-monitor
+spec:
+  taskRef:
+    name: task-kci-monitor
+
+  workspaces:
+    - name: data
+      persistentVolumeClaim:
+        claimName: pvc-kci-data
+
+  params:
+    - name: CONFIG_LIST
+      value: "amlogic_integ mainline"
